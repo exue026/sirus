@@ -2,4 +2,9 @@
 
 members = [
     "lfdeque",
+    "bing",
+]
+
+default-members = [
+    "bing"
 ]
