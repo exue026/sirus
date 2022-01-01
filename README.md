@@ -5,4 +5,5 @@ Stuff implemented in rust
 - Lock free work stealing deque:
   - https://www.dre.vanderbilt.edu/~schmidt/PDF/work-stealing-dequeue.pdf
   - https://blog.molecular-matters.com/2015/08/24/job-system-2-0-lock-free-work-stealing-part-1-basics/
+  - https://rust-lang.github.io/async-book/02_execution/01_chapter.html
 - Raft

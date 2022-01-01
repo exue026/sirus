@@ -3,6 +3,7 @@
 members = [
     "lfdeque",
     "bing",
+    "fexec",
 ]
 
 default-members = [
