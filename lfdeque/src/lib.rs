@@ -1,69 +1,56 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::mem;
 use std::cell::UnsafeCell;
-
-#[derive(Debug)]
-enum Elem<T> {
-    Empty,
-    Val(T)
-}
-
-impl<T> Clone for Elem<T> {
-    fn clone(&self) -> Elem<T> {
-        match self {
-            Elem::Empty => Elem::Empty,
-            Elem::Val(_) => unreachable!(),
-        }
-    }
-}
+mod seat;
+use seat::Seat;
 
 #[derive(Debug, Clone)]
 pub struct LFQueue<T> {
     top: Arc<AtomicUsize>,
     bottom: Arc<AtomicUsize>,
-    q: Arc<UnsafeCell<Vec<Elem<T>>>>,
+    q: Arc<UnsafeCell<Vec<Option<Seat<T>>>>>,
 }
 
-impl<T> LFQueue<T> {
+impl<T: std::fmt::Debug> LFQueue<T> {
     pub fn new(capacity: usize) -> Self {
+        let q = Arc::new(UnsafeCell::new(Vec::new()));
+        let temp = q.get();
+        unsafe {
+            (*temp).resize_with(capacity, || None);
+        }
+
         Self {
             top: Arc::new(AtomicUsize::new(0)),
             bottom: Arc::new(AtomicUsize::new(0)),
-            q: Arc::new(UnsafeCell::new(vec![Elem::Empty; capacity])),
+            q
         }
     }
 
-    fn get_elem(&mut self, idx: usize) -> Option<T> {
-        let mut elem = Elem::Empty;
+    fn get_elem(&mut self, idx: usize) -> Option<Seat<T>> {
         let q = self.q.get();
         unsafe {
             let len = (*q).len();
-            mem::swap(&mut elem, &mut (*q)[idx % len]);    
-        }
-
-        match elem {
-            Elem::Empty => None,
-            Elem::Val(e) => Some(e)
+            let elem = &(*q)[idx % len];
+            elem.as_ref().cloned()
         }
     }
 
-    pub fn push(&mut self, elem: T) {
+    pub fn push(&mut self, elem: T) -> bool {
         let b = self.bottom.load(Ordering::SeqCst);
         let t = self.top.load(Ordering::SeqCst);
 
         let q = self.q.get();
         unsafe {
             let len = (*q).len();
-            if b - t >= len {
-                (*q).resize(len * 2, Elem::Empty);
+            if b - t >= len - 1 {
+                return false
             }
 
-            let len = (*q).len();
-            (*q)[b % len] = Elem::Val(elem);    
+            (*q)[b % len] = Some(Seat::new(elem));
         }
 
         self.bottom.store(b + 1, Ordering::SeqCst);
+        true
     }
 
     pub fn pop(&mut self) -> Option<T> {
@@ -75,13 +62,14 @@ impl<T> LFQueue<T> {
             return None;
         }
         
+        let elem = self.get_elem(b);
         if b > t {
-            return self.get_elem(b);
+            return elem.map(Seat::take)
         }
 
         self.bottom.store(t + 1, Ordering::SeqCst);
-        if self.top.compare_exchange(t, t+1, Ordering::SeqCst, Ordering::Relaxed).is_ok() {
-            return self.get_elem(b);
+        if self.top.compare_exchange(t, t+1, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            return elem.map(Seat::take);
         }
 
         None
@@ -92,8 +80,9 @@ impl<T> LFQueue<T> {
         let t = self.top.load(Ordering::SeqCst);
 
         if b <= t { return None; }
-        if self.top.compare_exchange(t, t+1, Ordering::SeqCst, Ordering::Relaxed).is_ok() {
-            return self.get_elem(t);
+        let elem = self.get_elem(t);
+        if self.top.compare_exchange(t, t+1, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            return elem.map(Seat::take)
         }
 
         None
@@ -111,19 +100,13 @@ fn test_init() {
     let count =  100000;
     let thread_count = 7;
 
-    let s: usize = push_elemts.into_iter().sum();
+    let s: usize = push_elemts.iter().sum();
     let expected_sum = count * s;
     let expected_elems = count * push_elemts.len();
     let mut threads = Vec::new();
 
-    let mut q = LFQueue::new(10);
+    let mut q = LFQueue::new(5);
     let cur = Arc::new(AtomicUsize::new(0));
-
-    for _ in 0..count {
-        for e in push_elemts {
-            q.push(e);
-        }
-    }
 
     for i in 0..thread_count {
         let mut q_clone = q.clone();
@@ -151,9 +134,18 @@ fn test_init() {
         threads.push(t);
     }
 
+    for _ in 0..count {
+        for e in push_elemts {
+            let mut r = q.push(e);
+            while !r {
+                r = q.push(e);
+            }
+        }
+    }
+
     let mut here = 0;
     loop {
-        let e = q.steal();
+        let e = q.pop();
         match e {
             None => {},
             Some(e) => {
@@ -161,7 +153,7 @@ fn test_init() {
                 here += 1;
             }
         }
-
+        println!("main {:?}", e);
         let c = cur.load(Ordering::SeqCst);
         if c == expected_sum { break; }
     }
