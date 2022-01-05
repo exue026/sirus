@@ -1,5 +1,5 @@
 # sirus
-Stuff implemented in rust
+Stuff implemented in rust.
 
 ## Implementations
 - Lock free work stealing deque:
